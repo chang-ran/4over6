@@ -41,18 +41,18 @@ public class MainActivity extends AppCompatActivity {
     private EditText port;
     private TextView flow_view;
     private boolean running;
-
-    private Timer timer_ip;
     private Timer timer_flow;
-    private TimerTask task_ip;
+    private Timer timer_set;
     private TimerTask task_flow;
-    private static Handler handler = new Handler(Looper.getMainLooper());
+    private TimerTask set_flow;
+    Handler handler = new Handler(Looper.getMainLooper());
     private String[] dns;
     private boolean ip_flag;
     private String ip_addr;
     private  int sockfd;
     private  int tunfd;
     private  String route;
+    private String flow_text;
     Receiver vpnreceiver;
     String[] permissions = new String[]{
             Manifest.permission.INTERNET,
@@ -68,6 +68,7 @@ public class MainActivity extends AppCompatActivity {
             tunfd = intent.getIntExtra("tunfd",-1);
             setTunfd(tunfd);
             Log.d("frontend", "tunfd: " + String.valueOf(tunfd) + ", just been sent");
+//            start();
         }
     }
 
@@ -84,96 +85,114 @@ public class MainActivity extends AppCompatActivity {
         dns = new String[3];
         running = false;
         ip_flag = false;
-
-        // Example of a call to a native method
-//        TextView tv = findViewById(R.id.sample_text);
-//        tv.setText(stringFromJNI());
-
-        check();
+        flow_text = "not in connection";
         flow_view = findViewById(R.id.flow);
-        task_init();
-
-        new Thread(new Runnable() {
+        new Thread(){
             @Override
             public void run() {
-                timer_ip.schedule(task_ip,0,1000);
+                ip_task();
             }
-        }).start();
+        }.start();
 
+        task_init();
         timer_flow.schedule(task_flow, 0, 1000);
+        timer_set.schedule(set_flow,0,1000);
 
-
+//
+//
         vpnreceiver = new Receiver();
         IntentFilter filter = new IntentFilter();
         filter.addAction("casttun");
         registerReceiver(vpnreceiver, filter);
         view_init();
+
     }
     protected void  task_init(){
-        timer_ip = new Timer();
         timer_flow = new Timer();
+        timer_set = new Timer();
+        set_flow = new TimerTask() {
+            @Override
+            public void run() {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        flow_view.setText(flow_text);
+                    }
+                });
+            }
+        };
         task_flow = new TimerTask() {
             @Override
             public void run() {
                 if (running){
                     final String ans = getflow();
                     String[] infos = ans.split(" ");
-                    if (infos.length < 5) return;
                     int time = Integer.parseInt(infos[4]);
-                    final String newMsg ="IPv4: "+ ip_addr +
+                    flow_text ="IPv4: "+ ip_addr +
                             "\nsend speed: " + getFlow(String.valueOf(Double.parseDouble(infos[0])/time)) + "/s;   receive speed: " +
                             getFlow(String.valueOf(Double.parseDouble(infos[2])/time)) + "/s\ntotal send: " + getFlow(infos[0]) + ";   send count: " +
                             infos[1] + "\ntotal receive: " +  getFlow(infos[2])+ ";    receive count : " +  infos[3]
                             + "\ntime: " +  getTime(infos[4]);
-                    Runnable run = new Runnable() {
-                        @Override
-                        public void run() {
-                            flow_view.setText(newMsg);
-                        }
-                    };
-                    handler.post(run);
                 }else{
-                    Runnable run = new Runnable() {
-                        @Override
-                        public void run() {
-                            flow_view.setText("not in connection");
-                        }
-                    };
-                    handler.post(run);
+                    flow_text = "not in connection";
 
                 }
+//                Log.d("frontend", flow_text);
             }
         };
-        task_ip = new TimerTask() {
-            @Override
-            public void run() {
-                if (!ip_flag) {
-                    String ip_info = getip();
-                    if (ip_info.length() > 10) {
-                        ip_flag = true;
-                        String[] ip_infos = ip_info.split(" ");
-                        int cursor = 0;
-                        sockfd = Integer.parseInt(ip_infos[cursor++]);
-                        ip_addr = ip_infos[cursor++];
-                        route = ip_infos[cursor++];
-                        dns[0] = ip_infos[cursor++];
-                        dns[1] = ip_infos[cursor++];
-                        dns[2] = ip_infos[cursor];
-                        Log.d("frontend", "ip_addr: " + ip_addr);
-                        Log.d("frontend", "route: " + route);
-                        Log.d("frontend", "dns[0]: " + dns[0]);
-                        Log.d("frontend", "dns[1]: " + dns[1]);
-                        Log.d("frontend", "dns[2]" + dns[2]);
-                        // open VPNService
-                        startVpnService();
-                    }
-                }else{
-                    cancel();
-                }
-            }
-        };
+//        task_ip = new TimerTask() {
+//            @Override
+//            public void run() {
+//                if (!ip_flag) {
+//                    String ip_info = getip();
+//                    if (ip_info.length() > 10) {
+//                        ip_flag = true;
+//                        String[] ip_infos = ip_info.split(" ");
+//                        int cursor = 0;
+//                        sockfd = Integer.parseInt(ip_infos[cursor++]);
+//                        ip_addr = ip_infos[cursor++];
+//                        route = ip_infos[cursor++];
+//                        dns[0] = ip_infos[cursor++];
+//                        dns[1] = ip_infos[cursor++];
+//                        dns[2] = ip_infos[cursor];
+//                        Log.d("frontend", "ip_addr: " + ip_addr);
+//                        Log.d("frontend", "route: " + route);
+//                        Log.d("frontend", "dns[0]: " + dns[0]);
+//                        Log.d("frontend", "dns[1]: " + dns[1]);
+//                        Log.d("frontend", "dns[2]" + dns[2]);
+//                        // open VPNService
+//                        startVpnService();
+//                    }
+//                }else{
+//                    cancel();
+//                }
+//            }
+//        };
     }
-
+    void ip_task(){
+        while (!ip_flag) {
+            String ip_info = getip();
+            if (ip_info.length() > 10) {
+                ip_flag = true;
+                String[] ip_infos = ip_info.split(" ");
+                int cursor = 0;
+                int len = ip_infos.length;
+                sockfd = Integer.parseInt(ip_infos[cursor++]);
+                ip_addr = ip_infos[cursor++];
+                route = ip_infos[cursor++];
+                dns[0] = ip_infos[cursor++];
+                if (cursor<=len-1) dns[1] = ip_infos[cursor++];
+                if (cursor<=len-1) dns[2] = ip_infos[cursor];
+                Log.d("frontend", "ip_addr: " + ip_addr);
+                Log.d("frontend", "route: " + route);
+                Log.d("frontend", "dns[0]: " + dns[0]);
+                Log.d("frontend", "dns[1]: " + dns[1]);
+                Log.d("frontend", "dns[2]" + dns[2]);
+                // open VPNService
+                startVpnService();
+            }
+        }
+    }
     protected void view_init(){
         connect = findViewById(R.id.connect);
         disconnect = findViewById(R.id.disconnect);
@@ -183,7 +202,6 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 if (!running){
-
                     running = true;
                     new Thread(new Runnable() {
                         @Override
@@ -191,7 +209,6 @@ public class MainActivity extends AppCompatActivity {
                             buildconnection(address.getText().toString(), port.getText().toString());
                         }
                     }).start();
-
                 }else{
                     Toast.makeText(MainActivity.this, "后台正在运行",Toast.LENGTH_SHORT).show();
                 }
@@ -201,14 +218,12 @@ public class MainActivity extends AppCompatActivity {
         disconnect.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if(running) {
-                    running = false;
-                    breakconnection();
-                }
+                running = false;
+                breakconnection();
+
             }
         });
     }
-
     private void startVpnService() {
         Intent intent = VpnService.prepare(this);
         if (intent != null ){
@@ -217,7 +232,6 @@ public class MainActivity extends AppCompatActivity {
             onActivityResult(0 ,RESULT_OK, null);
         }
     }
-
 
     protected String getFlow(String s) {
         if (s.isEmpty()) return "0B";
@@ -246,25 +260,7 @@ public class MainActivity extends AppCompatActivity {
             return "0:0:0";
         }
     }
-    protected void processMsgFromFlow(final String msg) {
-        Runnable run = new Runnable() {
-            @Override
-            public void run() {
-                String[] infos = msg.split(" ");
-//                Log.d("frontend", msg);
-                if (infos.length < 5) return;
-                int time = Integer.parseInt(infos[6]);
-                String newMsg ="IPv4: "+ ip_addr +
-                        "\nsend speed: " + getFlow(String.valueOf(Double.parseDouble(infos[2])/time)) + "/s;   receive speed: " +
-                        getFlow(String.valueOf(Double.parseDouble(infos[4])/time)) + "/s\ntotal send: " + getFlow(infos[2]) + ";   send count: " +
-                        infos[3] + "\ntotal receive: " +  getFlow(infos[4])+ ";    receive count : " +  infos[5]
-                        + "\ntime: " +  getTime(infos[6]);
-                Log.d("Flow", newMsg);
-                flow_view.setText(newMsg);
-            }
-        };
-        handler.post(run);
-    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -280,18 +276,27 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra("dns2", dns[2]);
 
         startService(intent);
+
     }
-    private void check(){
-        List<String> require  = new ArrayList<>();
-        for ( String permission : permissions){
-            int tmp = ContextCompat.checkSelfPermission(this,permission);
-            Log.d("frontend", permission);
-            Log.d("frontend", String.valueOf(tmp));
-            if (tmp != PackageManager.PERMISSION_GRANTED) require.add(permission);
-        }
-        if (!require.isEmpty()){
-            ActivityCompat.requestPermissions(MainActivity.this, require.toArray(new String[require.size()]), 100);
-        }
+    void start(){
+                new Thread(){
+            @Override
+            public void run() {
+                listen();
+            }
+        }.start();
+        new Thread(){
+            @Override
+            public void run() {
+                readtun();
+            }
+        }.start();
+        new Thread(){
+            @Override
+            public void run() {
+                heartbeat();
+            }
+        }.start();
     }
     /**
      * A native method that is implemented by the 'native-lib' native library,
@@ -303,6 +308,10 @@ public class MainActivity extends AppCompatActivity {
     public native String getip();
     public native String getflow();
     public native String setTunfd(int tun);
+    public native void listen();
+    public native void readtun();
+    public native void heartbeat();
+
     protected void onDestroy() {
         unregisterReceiver(vpnreceiver);
         super.onDestroy();

@@ -12,13 +12,15 @@ public class MyVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         int sockfd = intent.getIntExtra("socket",-1);
         protect(sockfd);
-        mInterface = builder.setSession(intent.getStringExtra("session"))
+        builder.setSession(intent.getStringExtra("session"))
                 .addAddress(intent.getStringExtra("ip_addr"), 24)
                 .addRoute(intent.getStringExtra("route"), 0)
-                .addDnsServer(intent.getStringExtra("dns0"))
-                .addDnsServer(intent.getStringExtra("dns1"))
-                .addDnsServer(intent.getStringExtra("dns2"))
-                .setMtu(1500)
+                .addDnsServer(intent.getStringExtra("dns0"));
+        String dns1 = intent.getStringExtra("dns1");
+        String dns2 = intent.getStringExtra("dns2");
+        if (dns1 != null)builder.addDnsServer(intent.getStringExtra("dns1"));
+        if(dns2!=null)builder.addDnsServer(intent.getStringExtra("dns2"));
+        mInterface = builder.setMtu(1500)
                 .establish();
         int tunfd = mInterface.getFd();
         Intent cast = new Intent();

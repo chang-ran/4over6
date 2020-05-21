@@ -36,10 +36,10 @@
                 android:layout_gravity="center"
                 android:ems="10"
                 android:inputType="textPersonName"
-                android:text="2402:f000:4:72:808::9a47"/>
+                android:text="2408:84ef:15:7ab1:34be:d20b:7500:b8bd"/>
 
         </LinearLayout>
-
+<!--        2402:f000:4:72:808::9a47-->
         <Space
             android:layout_width="match_parent"
             android:layout_height="35dp" />
@@ -67,10 +67,10 @@
                 android:ems="10"
                 android:layout_gravity="center"
                 android:inputType="textPersonName"
-                android:text="5678"/>
+                android:text="8091"/>
 
         </LinearLayout>
-
+<!--5678-->
         <Space
             android:layout_width="match_parent"
             android:layout_height="73dp" />

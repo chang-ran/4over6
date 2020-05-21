@@ -11,14 +11,13 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include<errno.h>
 
 #define TAG "native_backend"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 #define MSG_DATA_LENGTH 4096
-#define MSG_LENGTH (4096 + sizeof(int) + sizeof(char))
-#define HEADER_SIZE sizeof(int) + sizeof(char)
 using namespace std;
 int sockfd;
 struct Msg {
@@ -37,7 +36,7 @@ bool running;
 
 pthread_mutex_t lock_time;
 pthread_mutex_t lock_sockfd;
-pthread_mutex_t lock_tunfd;
+
 
 static time_t cur_time, last_beat, init_time;
 
@@ -56,6 +55,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_java_a4over6_MainActivity_getflow(
         JNIEnv *env,
         jobject /* this */) {
+    cur_time = time(nullptr);
     string ans = to_string(tot_send)+" "+to_string(send_count) + " "+
             to_string(tot_recv)+" "+to_string(recv_count)+ " "+to_string(cur_time-init_time);
 //    LOGD("send back info: %s\n",ans.c_str());
@@ -85,7 +85,7 @@ Java_com_java_a4over6_MainActivity_setTunfd(
 int send_msg(int sockfd, struct Msg *msg, int length)
 {
     pthread_mutex_lock(&lock_sockfd);
-    long real_len = send(sockfd, (char*)msg, (size_t)length, 0);
+    long real_len = write(sockfd, (char*)msg, (size_t)length);
     pthread_mutex_unlock(&lock_sockfd);
     if (real_len < length) {
         LOGE("send_msg() error: length incompatible.\n");
@@ -107,7 +107,7 @@ int sock_recv(int sockfd, char* buf, int n)
 {
     int cur = 0, len;
     while (cur < n && running) {
-        len = recv(sockfd, buf + cur, n - cur, 0);
+        len = read(sockfd, buf + cur, n - cur);
         if (len <  0 ) {
             return -1;
         }
@@ -118,27 +118,23 @@ int sock_recv(int sockfd, char* buf, int n)
     }
     return cur;
 }
-
-void* read_tun(void* arg)
+//extern "C"
+//JNIEXPORT void JNICALL
+//Java_com_java_a4over6_MainActivity_
+void * readtun(void* arg)
 {
     struct Msg tun_packet;
     LOGD("start read tun....");
-    while (!tun_flag  && running);
+    while (!tun_flag );
     LOGD("tun is ready");
+
     while (running ) {
-//        sleep(1);
-//        memset(&tun_packet, 0, sizeof(struct Msg));
-//        pthread_mutex_lock(&lock_tunfd);
         int  length = read(tunfd, tun_packet.data, sizeof(struct Msg)-5);
-//        LOGD("tun.data : %d\n",length);
-//        pthread_mutex_unlock(&lock_tunfd);
 
         if (length > 0) {
             tun_packet.length = length + 5;
             tun_packet.type = 102;
-//            LOGD("sending 102\n");
             send_msg(sockfd, &tun_packet, tun_packet.length);
-//            LOGD("send 102 finish\n");
             send_count += 1;
             tot_send += tun_packet.length;
         }else{
@@ -146,30 +142,35 @@ void* read_tun(void* arg)
                 sleep(0);
             }else{
                 LOGD("%s failed: %s (%d)\n", __FUNCTION__, strerror(errno), errno);
+                return nullptr;
             }
         }
-
     }
     LOGD("read_tun() exit.\n");
     return nullptr;
 }
 
+//extern "C"
+//JNIEXPORT void JNICALL
+//Java_com_java_a4over6_MainActivity_
 void* heartbeat(void* arg)
 {
-    LOGD("start heartbeat......");
+
     int tmp = 0;
     struct Msg msg;
     msg.type = 104;
     msg.length = 5;
+    while(!ip_flag);
+    LOGD("start heartbeat......");
     while (running) {
         sleep(1);
         tmp++;
         cur_time = time(NULL);
         if (tmp <= 60) {
             if (tmp%20==0) {
-                LOGD("sending 104\n");
+//                LOGD("sending 104\n");
                 send_msg(sockfd, &msg, 5);
-                LOGD("send 104 finish");
+//                LOGD("send 104 finish");
             }
         } else {
 
@@ -182,6 +183,44 @@ void* heartbeat(void* arg)
     }
     LOGD("heartbeat thread exit.\n");
     return nullptr;
+}
+
+//extern "C"
+//JNIEXPORT void JNICALL
+//Java_com_java_a4over6_MainActivity_
+void* listens(void* arg){
+    struct Msg r_packet;
+    while (running) {  //running
+        LOGD("receiving....");
+        int size = sock_recv(sockfd, (char *)&r_packet, 5);
+        if (size == -1){
+            LOGE("receiver head failed\n");
+            continue;
+        }
+        int data_size = sock_recv(sockfd, ((char *)&r_packet) + 5, r_packet.length - 5);
+        if (data_size == -1){
+            LOGE("receiver data failed\n");
+            continue;
+        }
+
+        LOGD("recv packet type: %d\n", r_packet.type);
+        LOGD("head_len: %d, data_len: %d\n", size, data_size);
+
+        if (r_packet.type == 103) {
+            int length = r_packet.length - sizeof(int) - sizeof(char);
+            long write_len = write(tunfd, r_packet.data, (size_t)length);
+            if (write_len != length) {
+                LOGE("103 error. length incompatible.");
+            }
+            recv_count += 1;
+            tot_recv += r_packet.length;
+        }
+        else if (r_packet.type == 104) {
+            last_beat = time(nullptr);
+        }
+    }
+    LOGD("stop listen\n");
+    return  nullptr;
 }
 
 extern "C"
@@ -205,11 +244,10 @@ Java_com_java_a4over6_MainActivity_buildconnection(JNIEnv *env, jobject instance
     ip_flag = false;
     tun_flag = false;
     running = true;
-    pthread_mutex_init(&lock_sockfd, nullptr);
-    pthread_mutex_init(&lock_tunfd, nullptr);
     cur_time = time(nullptr);
     last_beat = cur_time;
     init_time = cur_time;
+    pthread_mutex_init(&lock_sockfd, nullptr);
 
     int ret;
 
@@ -263,56 +301,47 @@ Java_com_java_a4over6_MainActivity_buildconnection(JNIEnv *env, jobject instance
     } else {
         LOGD("send_ip_request() succeeded.\n");
     }
+//    cur_time = time(nullptr);
+//    last_beat = cur_time;
+//    init_time = cur_time;
 
-    pthread_t read_tun_t, heartbeat_t;
-
-    pthread_create(&heartbeat_t, nullptr, heartbeat, nullptr);
-    pthread_create(&read_tun_t, nullptr, read_tun, nullptr);
-    // start while loop
     struct Msg recv_packet;
     while (running) {  //running
-        memset(&recv_packet, 0, sizeof(struct Msg));
+        LOGD("receiving....");
         int size = sock_recv(sockfd, (char *)&recv_packet, 5);
         if (size == -1){
             LOGE("receiver head failed\n");
             continue;
         }
-        int data_size = sock_recv(sockfd, ((char *)&recv_packet) + size, recv_packet.length - size);
+        int data_size = sock_recv(sockfd, ((char *)&recv_packet) + 5, recv_packet.length - 5);
         if (data_size == -1){
             LOGE("receiver data failed\n");
             continue;
         }
-
-            LOGD("head_len: %d, data_len: %d\n", size, data_size);
-            LOGD("recv packet type: %d\n", recv_packet.type);
+        LOGD("recv packet type: %d\n", recv_packet.type);
+        LOGD("head_len: %d, data_len: %d\n", size, data_size);
+        LOGD("data: %s\n",recv_packet.data);
 
         if (recv_packet.type == 101) {
             packet101 = recv_packet.data;
             ip_flag = true;
-        }
-        else if (recv_packet.type == 103) {
-            int length = recv_packet.length - sizeof(int) - sizeof(char);
-//            pthread_mutex_lock(&lock_tunfd);
-            long write_len = write(tunfd, recv_packet.data, (size_t)length);
-//            pthread_mutex_unlock(&lock_tunfd);
-            if (write_len != length) {
-                LOGE("103 error. length incompatible.");
-            }
-            recv_count += 1;
-            tot_recv += recv_packet.length;
-        }
-        else if (recv_packet.type == 104) {
-//            LOGD("recv heartbeat.\n");
-            pthread_mutex_lock(&lock_time);
-            last_beat = time(nullptr);
-            pthread_mutex_unlock(&lock_time);
+            LOGD("build connection success\n");
+            break;
         }
     }
+    pthread_t read_tun,heart_beat,listen_t;
+    pthread_create(&read_tun, nullptr,readtun, nullptr);
+    pthread_create(&heart_beat, nullptr,heartbeat, nullptr);
+    pthread_create(&listen_t, nullptr,listens, nullptr);
 
-    pthread_join(read_tun_t, nullptr);
-    pthread_join(heartbeat_t, nullptr);
-
+//
+    pthread_join(read_tun, nullptr);
+    pthread_join(heart_beat, nullptr);
+    pthread_join(listen_t, nullptr);
+//
     close(sockfd);
+    tot_recv = tot_send = 0;
+    recv_count = send_count = 0;
 
     LOGD("backend thread successfully returned.\n");
     out:
@@ -320,6 +349,6 @@ Java_com_java_a4over6_MainActivity_buildconnection(JNIEnv *env, jobject instance
     env->ReleaseStringUTFChars(port_, port);
     freeaddrinfo(res);
     close(sockfd);
-    LOGD("backend thread successfully returned.\n");
+//    LOGD("backend thread successfully returned.\n");
     return;
 }
